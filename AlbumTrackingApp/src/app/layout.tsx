@@ -32,7 +32,7 @@ export default function RootLayout({
       <body className="h-full bg-slate-50 dark:bg-zinc-950 text-slate-900 dark:text-zinc-100 selection:bg-blue-100 dark:selection:bg-blue-900/30">
         <div className="flex flex-col md:flex-row h-full overflow-hidden">
           <Navbar />
-          <main className="flex-1 overflow-y-auto pb-20 md:pb-0 px-4 py-8 md:px-8">
+          <main className="flex-1 overflow-y-auto pt-28 pb-20 md:pb-0 px-4 py-8 md:px-8">
             <div className="max-w-6xl mx-auto">
               {children}
             </div>

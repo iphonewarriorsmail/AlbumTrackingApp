@@ -1,5 +1,11 @@
-import { MoreVertical, Plus } from "lucide-react";
+"use client";
+
+import { useState } from "react";
+import { MoreVertical, Plus, Trash2, Edit3, BarChart3, ChevronRight, Loader2 } from "lucide-react";
 import Link from "next/link";
+import { createClient } from "@/utils/supabase/client";
+import { toast } from "react-hot-toast";
+import { useRouter } from "next/navigation";
 
 interface AlbumCardProps {
   id: string;
@@ -8,47 +14,108 @@ interface AlbumCardProps {
   progress: number;
   total: number;
   collected: number;
+  onRefresh?: () => void;
 }
 
-export default function AlbumCard({ id, name, category, progress, total, collected }: AlbumCardProps) {
+export default function AlbumCard({ id, name, category, progress, total, collected, onRefresh }: AlbumCardProps) {
+  const [showMenu, setShowMenu] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const supabase = createClient();
+  const router = useRouter();
+
+  const handleDelete = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!confirm(`¿Estás seguro de que quieres eliminar el álbum "${name}"? Esta acción no se puede deshacer.`)) return;
+    
+    setDeleting(true);
+    try {
+      const { error } = await supabase.from('albums').delete().eq('id', id);
+      if (error) throw error;
+      toast.success("Álbum eliminado");
+      if (onRefresh) onRefresh();
+      else router.refresh();
+    } catch (error: any) {
+      toast.error(error.message);
+    } finally {
+      setDeleting(false);
+      setShowMenu(false);
+    }
+  };
+
   return (
-    <div className="group relative bg-white dark:bg-zinc-900 rounded-3xl p-6 border border-slate-200 dark:border-zinc-800 hover:shadow-2xl hover:shadow-blue-500/10 transition-all duration-300">
-      <div className="flex justify-between items-start mb-4">
-        <div>
-          <span className="text-xs font-semibold text-blue-600 dark:text-blue-400 uppercase tracking-wider">
+    <div className="group relative bg-white dark:bg-zinc-900 rounded-[2.5rem] p-8 border border-slate-200 dark:border-zinc-800 hover:shadow-2xl hover:shadow-blue-500/10 transition-all duration-300">
+      {deleting && (
+        <div className="absolute inset-0 bg-white/60 dark:bg-zinc-900/60 backdrop-blur-sm z-20 rounded-[2.5rem] flex items-center justify-center">
+          <Loader2 className="w-8 h-8 animate-spin text-red-500" />
+        </div>
+      )}
+
+      <div className="flex justify-between items-start mb-6">
+        <div className="flex-1">
+          <span className="text-[10px] font-black text-blue-600 dark:text-blue-400 uppercase tracking-widest bg-blue-50 dark:bg-blue-900/20 px-3 py-1 rounded-full">
             {category}
           </span>
-          <h3 className="text-xl font-bold mt-1 group-hover:text-blue-600 transition-colors">
+          <h3 className="text-2xl font-black mt-3 group-hover:text-blue-600 transition-colors tracking-tight">
             {name}
           </h3>
         </div>
-        <button className="p-2 hover:bg-slate-100 dark:hover:bg-zinc-800 rounded-full transition-colors">
-          <MoreVertical className="w-5 h-5 text-slate-400" />
-        </button>
+        
+        <div className="relative">
+          <button 
+            onClick={(e) => { e.stopPropagation(); setShowMenu(!showMenu); }}
+            className={`p-2.5 rounded-xl transition-all ${showMenu ? 'bg-slate-900 text-white' : 'hover:bg-slate-100 dark:hover:bg-zinc-800 text-slate-400'}`}
+          >
+            <MoreVertical className="w-5 h-5" />
+          </button>
+
+          {showMenu && (
+            <div className="absolute right-0 mt-2 w-48 bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-2xl shadow-2xl z-30 py-2 animate-in fade-in zoom-in-95 duration-200">
+              <button className="w-full px-4 py-3 text-left text-sm font-bold flex items-center gap-2 hover:bg-slate-50 dark:hover:bg-zinc-800">
+                <Edit3 className="w-4 h-4 text-slate-400" /> Editar Propiedades
+              </button>
+              <Link href={`/dashboard/${id}/stats`} className="w-full px-4 py-3 text-left text-sm font-bold flex items-center gap-2 hover:bg-slate-50 dark:hover:bg-zinc-800">
+                <BarChart3 className="w-4 h-4 text-blue-500" /> Ver Estadísticas
+              </Link>
+              <div className="h-px bg-slate-100 dark:bg-zinc-800 my-1" />
+              <button 
+                onClick={handleDelete}
+                className="w-full px-4 py-3 text-left text-sm font-bold flex items-center gap-2 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20"
+              >
+                <Trash2 className="w-4 h-4" /> Eliminar Álbum
+              </button>
+            </div>
+          )}
+        </div>
       </div>
 
-      <div className="mt-6">
-        <div className="flex justify-between text-sm mb-2">
-          <span className="text-slate-500 dark:text-zinc-400 font-medium">Progreso</span>
-          <span className="font-bold text-blue-600 dark:text-blue-400">{progress}%</span>
+      <div className="mt-8">
+        <div className="flex justify-between text-xs mb-3">
+          <span className="text-slate-400 dark:text-zinc-500 font-black uppercase tracking-widest">Progreso</span>
+          <span className="font-black text-blue-600 dark:text-blue-400">{progress}%</span>
         </div>
-        <div className="w-full h-2.5 bg-slate-100 dark:bg-zinc-800 rounded-full overflow-hidden">
+        <div className="w-full h-3 bg-slate-100 dark:bg-zinc-800 rounded-full overflow-hidden">
           <div 
-            className="h-full bg-blue-600 rounded-full transition-all duration-1000 ease-out shadow-[0_0_12px_rgba(37,99,235,0.4)]"
+            className="h-full bg-blue-600 rounded-full transition-all duration-1000 ease-out shadow-[0_0_15px_rgba(37,99,235,0.4)]"
             style={{ width: `${progress}%` }}
           />
         </div>
-        <div className="flex justify-between mt-4 text-xs text-slate-400 dark:text-zinc-500">
-          <span>{collected} pegadas</span>
-          <span>{total - collected} faltantes</span>
+        <div className="flex justify-between mt-5">
+          <div className="text-center">
+            <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Pegadas</div>
+            <div className="font-black text-slate-900 dark:text-white">{collected}</div>
+          </div>
+          <div className="text-center border-l border-slate-100 dark:border-zinc-800 pl-6">
+            <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Faltantes</div>
+            <div className="font-black text-red-500">{total - collected}</div>
+          </div>
         </div>
       </div>
       
       <Link 
         href={`/dashboard/${id}`}
-        className="mt-8 block w-full py-3 bg-slate-50 dark:bg-zinc-800/50 hover:bg-blue-600 hover:text-white rounded-2xl text-sm font-semibold transition-all duration-200 border border-transparent hover:shadow-lg hover:shadow-blue-500/20 text-center"
+        className="mt-10 flex items-center justify-center gap-2 w-full py-4 bg-slate-900 dark:bg-white text-white dark:text-black rounded-2xl font-black text-sm hover:scale-[1.02] active:scale-95 transition-all shadow-xl shadow-slate-900/10"
       >
-        Ver Detalles
+        Gestionar Cromos <ChevronRight className="w-4 h-4" />
       </Link>
     </div>
   );
@@ -56,13 +123,13 @@ export default function AlbumCard({ id, name, category, progress, total, collect
 
 export function NewAlbumCard() {
   return (
-    <Link href="/dashboard/new" className="group flex flex-col items-center justify-center p-8 bg-white dark:bg-zinc-900 rounded-3xl border-2 border-dashed border-slate-200 dark:border-zinc-800 hover:border-blue-500/50 hover:bg-blue-50/30 dark:hover:bg-blue-900/5 transition-all duration-300 min-h-[320px]">
-      <div className="w-14 h-14 bg-slate-100 dark:bg-zinc-800 rounded-2xl flex items-center justify-center mb-4 group-hover:bg-blue-600 group-hover:rotate-90 transition-all duration-500">
-        <Plus className="w-8 h-8 text-slate-400 group-hover:text-white" />
+    <Link href="/dashboard/new" className="group flex flex-col items-center justify-center p-10 bg-white dark:bg-zinc-900 rounded-[2.5rem] border-4 border-dashed border-slate-100 dark:border-zinc-800 hover:border-blue-500/50 hover:bg-blue-50/30 dark:hover:bg-blue-900/10 transition-all duration-500 min-h-[360px] text-center">
+      <div className="w-20 h-20 bg-slate-100 dark:bg-zinc-800 rounded-[2rem] flex items-center justify-center mb-6 group-hover:bg-blue-600 group-hover:rotate-90 transition-all duration-500 shadow-lg group-hover:shadow-blue-500/40">
+        <Plus className="w-10 h-10 text-slate-400 group-hover:text-white" />
       </div>
-      <h3 className="text-lg font-bold">Nuevo Álbum</h3>
-      <p className="text-sm text-slate-500 dark:text-zinc-500 text-center mt-2 max-w-[160px]">
-        Empieza a trackear una nueva colección
+      <h3 className="text-2xl font-black tracking-tight">Nuevo Álbum</h3>
+      <p className="text-sm text-slate-500 dark:text-zinc-500 mt-3 max-w-[200px] font-medium leading-relaxed">
+        Empieza una nueva colección con ayuda de la IA.
       </p>
     </Link>
   );
