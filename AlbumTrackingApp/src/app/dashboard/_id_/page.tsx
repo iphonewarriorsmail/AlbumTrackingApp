@@ -19,6 +19,7 @@ export default function CollectionDetailsPage({ params }: { params: Promise<{ id
 
   useEffect(() => {
     async function loadData() {
+      // Obtener la colección con los datos del álbum maestro
       const { data: colData } = await supabase
         .from('user_collections')
         .select('*, master_albums(*)')

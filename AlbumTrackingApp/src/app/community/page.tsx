@@ -2,20 +2,22 @@
 
 import { useState, useEffect } from "react";
 import { createClient } from "@/utils/supabase/client";
-import { Users, UserPlus, Search, ArrowRightLeft, Loader2, Info, Star, Check, Clock } from "lucide-react";
+import { Users, UserPlus, Search, ArrowRightLeft, Loader2, Info, Star, Check, Clock, UserCheck, BookOpen, ChevronRight, Lock, EyeOff } from "lucide-react";
 import { toast } from "react-hot-toast";
 
 interface Friend {
   id: string;
   display_name: string;
   email: string;
-  avatar_url: string;
   status: 'pending' | 'accepted';
+  is_public: boolean;
 }
 
 interface Match {
   friend_name: string;
+  friend_id: string;
   sticker_code: string;
+  collection_name: string;
   type: 'gives' | 'receives';
 }
 
@@ -24,7 +26,9 @@ export default function CommunityPage() {
   const [loading, setLoading] = useState(true);
   const [friends, setFriends] = useState<Friend[]>([]);
   const [matches, setMatches] = useState<Match[]>([]);
-  const [searchEmail, setSearchEmail] = useState("");
+  const [userCollections, setUserCollections] = useState<any[]>([]);
+  const [selectedCollectionId, setSelectedCollectionId] = useState<string>("all");
+  const [searchQuery, setSearchQuery] = useState("");
   const [user, setUser] = useState<any>(null);
 
   useEffect(() => {
@@ -33,43 +37,44 @@ export default function CommunityPage() {
       setUser(authUser);
       
       if (authUser) {
-        // 1. Cargar amigos reales con tipado explícito
+        // 1. Cargar mis colecciones públicas
+        const { data: collections } = await supabase
+          .from('user_collections')
+          .select('id, name, master_album_id, is_public')
+          .eq('user_id', authUser.id);
+        setUserCollections(collections || []);
+
+        // 2. Cargar amigos y solicitudes
         const { data: friendData } = await supabase
           .from('friendships')
           .select(`
-            id,
-            status,
-            friend:friend_id(id, email),
-            user:user_id(id, email)
+            id, status, friend:friend_id(id, email), user:user_id(id, email)
           `)
           .or(`user_id.eq.${authUser.id},friend_id.eq.${authUser.id}`) as { data: any[] | null };
 
-        if (friendData && friendData.length > 0) {
-          // Mapear para obtener los datos de perfil de los amigos
+        if (friendData) {
           const friendIds = friendData.map(f => f.user.id === authUser.id ? f.friend.id : f.user.id);
           const { data: profiles } = await supabase
             .from('user_settings')
-            .select('*')
+            .select('user_id, display_name, is_public')
             .in('user_id', friendIds);
 
           const formattedFriends = friendData.map(f => {
             const friendId = f.user.id === authUser.id ? f.friend.id : f.user.id;
             const profile = profiles?.find(p => p.user_id === friendId);
-            const friendEmail = f.user.id === authUser.id ? f.friend.email : f.user.email;
-            
             return {
               id: friendId,
               display_name: profile?.display_name || "Coleccionista",
-              avatar_url: profile?.avatar_url || "",
-              email: friendEmail,
-              status: f.status as any
+              email: f.user.id === authUser.id ? f.friend.email : f.user.email,
+              status: f.status as any,
+              is_public: profile?.is_public ?? true
             };
           });
           setFriends(formattedFriends);
-
-          const acceptedFriendIds = formattedFriends.filter(f => f.status === 'accepted').map(f => f.id);
-          if (acceptedFriendIds.length > 0) {
-            calculateMatches(authUser.id, acceptedFriendIds, formattedFriends);
+          
+          const acceptedFriends = formattedFriends.filter(f => f.status === 'accepted');
+          if (acceptedFriends.length > 0) {
+            calculatePrivacyMatches(authUser.id, acceptedFriends, collections || []);
           }
         }
       }
@@ -78,173 +83,202 @@ export default function CommunityPage() {
     loadCommunity();
   }, [supabase]);
 
-  const calculateMatches = async (userId: string, friendIds: string[], currentFriends: Friend[]) => {
+  const calculatePrivacyMatches = async (userId: string, acceptedFriends: Friend[], myCollections: any[]) => {
     try {
-      // 1. Obtener mis faltantes
-      const { data: myMissing } = await supabase
+      const friendIds = acceptedFriends.map(f => f.id);
+      
+      // Solo buscamos en colecciones de amigos que sean PÚBLICAS
+      const { data: friendCollections } = await supabase
+        .from('user_collections')
+        .select('id, user_id, master_album_id, name, is_public')
+        .in('user_id', friendIds)
+        .eq('is_public', true);
+
+      if (!friendCollections || friendCollections.length === 0) return;
+
+      // Obtener stickers de mis colecciones públicas
+      const myPublicCollections = myCollections.filter(c => c.is_public);
+      if (myPublicCollections.length === 0) return;
+
+      const { data: myStickers } = await supabase
         .from('album_stickers')
-        .select('sticker_code, album_id')
-        .eq('status', 'missing');
+        .select('sticker_code, status, album_id')
+        .in('album_id', myPublicCollections.map(c => c.id));
 
-      // 2. Obtener repetidas de amigos
-      const { data: friendsRepeated } = await supabase
+      const { data: friendsStickers } = await supabase
         .from('album_stickers')
-        .select('sticker_code, album_id, albums(user_id)')
-        .eq('status', 'repeated') as { data: any[] | null };
+        .select('sticker_code, status, album_id')
+        .in('album_id', friendCollections.map(c => c.id));
 
-      if (!myMissing || !friendsRepeated) return;
-
-      // Filtrar repetidas que pertenezcan a mis amigos
-      const filteredRepeated = friendsRepeated.filter(fr => friendIds.includes(fr.albums?.user_id));
+      if (!myStickers || !friendsStickers) return;
 
       const foundMatches: Match[] = [];
-      myMissing.forEach(m => {
-        const match = filteredRepeated.find(fr => fr.sticker_code === m.sticker_code);
-        if (match) {
-          const friendProfile = currentFriends.find(f => f.id === match.albums?.user_id);
-          foundMatches.push({
-            friend_name: friendProfile?.display_name || "Amigo",
-            sticker_code: m.sticker_code,
-            type: 'gives'
+
+      myPublicCollections.forEach(myCol => {
+        const myColStickers = myStickers.filter(s => s.album_id === myCol.id);
+        
+        // Buscar colecciones del mismo álbum maestro en mis amigos
+        const sameAlbumFriendsCols = friendCollections.filter(fc => fc.master_album_id === myCol.master_album_id);
+
+        sameAlbumFriendsCols.forEach(fCol => {
+          const friendColStickers = friendsStickers.filter(s => s.album_id === fCol.id);
+          const friendProfile = acceptedFriends.find(f => f.id === fCol.user_id);
+
+          // Cruce: Yo recibo
+          myColStickers.filter(s => s.status === 'missing').forEach(ms => {
+            if (friendColStickers.find(fs => fs.sticker_code === ms.sticker_code && fs.status === 'repeated')) {
+              foundMatches.push({
+                friend_name: friendProfile?.display_name || "Amigo",
+                friend_id: friendProfile?.id || "",
+                sticker_code: ms.sticker_code,
+                collection_name: myCol.name,
+                type: 'receives'
+              });
+            }
           });
-        }
+
+          // Cruce: Yo doy
+          myColStickers.filter(s => s.status === 'repeated').forEach(rs => {
+            if (friendColStickers.find(fs => fs.sticker_code === rs.sticker_code && fs.status === 'missing')) {
+              foundMatches.push({
+                friend_name: friendProfile?.display_name || "Amigo",
+                friend_id: friendProfile?.id || "",
+                sticker_code: rs.sticker_code,
+                collection_name: myCol.name,
+                type: 'gives'
+              });
+            }
+          });
+        });
       });
-      setMatches(foundMatches.slice(0, 4));
+
+      setMatches(foundMatches);
     } catch (err) {
-      console.error("Error calculating matches:", err);
+      console.error(err);
     }
   };
 
   const handleAddFriend = async () => {
-    if (!searchEmail) return;
-    const toastId = toast.loading("Buscando usuario...");
-
+    if (!searchQuery || !user) return;
+    const toastId = toast.loading("Buscando...");
     try {
-      const { data: targetUser } = await supabase
+      const { data: target } = await supabase
         .from('user_settings')
-        .select('user_id')
-        .eq('display_name', searchEmail)
+        .select('user_id, display_name, is_public')
+        .or(`display_name.ilike.%${searchQuery}%,email.eq.${searchQuery.toLowerCase()}`)
         .single();
 
-      if (targetUser && user) {
-        const { error } = await supabase.from('friendships').insert({
-          user_id: user.id,
-          friend_id: targetUser.user_id,
-          status: 'pending'
-        });
-        if (error) throw error;
-        toast.success("Solicitud enviada", { id: toastId });
-      } else {
-        toast.error("Usuario no encontrado", { id: toastId });
-      }
+      if (!target) throw new Error("Usuario no encontrado");
+
+      // Regla: Si es público, agregar directo. Si es privado, solicitud pendiente.
+      const status = target.is_public ? 'accepted' : 'pending';
+      
+      const { error } = await supabase.from('friendships').insert({
+        user_id: user.id,
+        friend_id: target.user_id,
+        status: status
+      });
+
+      if (error) throw error;
+
+      // Notificar al destinatario
+      await supabase.from('notifications').insert({
+        user_id: target.user_id,
+        from_user_id: user.id,
+        type: status === 'accepted' ? 'friend_accepted' : 'friend_request',
+        content: status === 'accepted' 
+          ? `${user.email} te ha añadido como amigo.` 
+          : `${user.email} quiere ser tu amigo.`
+      });
+
+      toast.success(status === 'accepted' ? `¡${target.display_name} añadido!` : "Solicitud enviada", { id: toastId });
+      window.location.reload();
     } catch (error) {
-      toast.error("Error al enviar solicitud", { id: toastId });
+      toast.error("Error al procesar la solicitud", { id: toastId });
     }
   };
 
-  if (loading) return (
-    <div className="flex items-center justify-center min-h-[60vh]">
-      <Loader2 className="w-10 h-10 animate-spin text-blue-600" />
-    </div>
-  );
-
   return (
-    <div className="max-w-6xl mx-auto pb-20 pt-10">
-      <header className="mb-12 flex flex-col md:flex-row justify-between items-start md:items-center gap-6 px-4">
+    <div className="max-w-7xl mx-auto pb-20 pt-10 px-4">
+      <header className="mb-12 flex flex-col xl:flex-row justify-between items-start xl:items-center gap-8">
         <div>
-          <h1 className="text-4xl font-black tracking-tight">Comunidad</h1>
-          <p className="text-slate-500 mt-2 text-lg font-medium">Tus amigos y oportunidades de intercambio.</p>
+          <h1 className="text-6xl font-black tracking-tighter mb-2">Comunidad</h1>
+          <p className="text-slate-500 text-xl font-medium">Búsqueda inteligente con privacidad integrada.</p>
         </div>
-        <div className="flex bg-white dark:bg-zinc-900 p-2 rounded-2xl border border-slate-200 dark:border-zinc-800 w-full md:w-auto shadow-xl">
+        
+        <div className="flex bg-white dark:bg-zinc-900 p-2.5 rounded-[2rem] border-2 border-slate-100 dark:border-zinc-800 shadow-2xl w-full xl:w-96">
           <input 
-            className="bg-transparent border-none px-4 py-2 outline-none text-sm w-full md:w-64"
-            placeholder="Nombre de usuario del amigo..."
-            value={searchEmail}
-            onChange={(e) => setSearchEmail(e.target.value)}
+            className="bg-transparent border-none px-6 py-3 outline-none text-sm w-full font-bold"
+            placeholder="Buscar coleccionista..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && handleAddFriend()}
           />
-          <button 
-            onClick={handleAddFriend}
-            className="bg-blue-600 text-white px-6 py-2 rounded-xl font-bold text-sm flex items-center gap-2 hover:bg-blue-700 transition-all"
-          >
-            <UserPlus className="w-4 h-4" /> Añadir
+          <button onClick={handleAddFriend} className="bg-blue-600 text-white px-8 py-3 rounded-2xl font-black text-sm hover:scale-105 transition-all">
+            Añadir
           </button>
         </div>
       </header>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-10 px-4">
-        <div className="lg:col-span-1 space-y-6">
-          <h3 className="text-xs font-black uppercase tracking-widest text-slate-400 flex items-center gap-2">
-            <Users className="w-4 h-4" /> Mis Amigos ({friends.length})
+      <div className="grid grid-cols-1 lg:grid-cols-4 gap-12">
+        {/* Sidebar Amigos */}
+        <div className="lg:col-span-1 space-y-8">
+          <h3 className="text-[10px] font-black uppercase tracking-widest text-slate-400 flex items-center gap-2">
+            <Users className="w-4 h-4" /> Mis Amigos
           </h3>
-          <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-[2.5rem] overflow-hidden shadow-sm">
-            <div className="divide-y divide-slate-100 dark:divide-zinc-800">
-              {friends.map((f) => (
-                <div key={f.id} className="p-6 flex items-center justify-between hover:bg-slate-50 dark:hover:bg-zinc-800/50 transition-all">
-                  <div className="flex items-center gap-4">
-                    <div className="w-12 h-12 bg-blue-100 dark:bg-blue-900/30 rounded-2xl flex items-center justify-center font-black text-blue-600 text-xl">
-                      {f.display_name[0].toUpperCase()}
-                    </div>
-                    <div>
-                      <h4 className="font-bold text-sm">{f.display_name}</h4>
-                      <div className="flex items-center gap-1.5 mt-1">
-                        {f.status === 'accepted' ? (
-                          <span className="text-[9px] font-black text-emerald-500 uppercase flex items-center gap-1">
-                            <Check className="w-3 h-3" /> Amigo
-                          </span>
-                        ) : (
-                          <span className="text-[9px] font-black text-amber-500 uppercase flex items-center gap-1">
-                            <Clock className="w-3 h-3" /> Pendiente
-                          </span>
-                        )}
-                      </div>
-                    </div>
+          <div className="bg-white dark:bg-zinc-900 rounded-[3rem] border border-slate-200 dark:border-zinc-800 shadow-xl overflow-hidden">
+            {friends.map(f => (
+              <div key={f.id} className="p-6 flex items-center justify-between border-b border-slate-50 dark:border-zinc-800 last:border-0">
+                <div className="flex items-center gap-4">
+                  <div className="w-10 h-10 bg-slate-100 dark:bg-zinc-800 rounded-xl flex items-center justify-center font-black">
+                    {f.display_name[0]}
                   </div>
-                </div>
-              ))}
-              {friends.length === 0 && (
-                <div className="p-10 text-center text-slate-400 text-sm italic">
-                  Aún no tienes amigos añadidos.
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-
-        <div className="lg:col-span-2 space-y-6">
-          <h3 className="text-xs font-black uppercase tracking-widest text-slate-400 flex items-center gap-2">
-            <ArrowRightLeft className="w-4 h-4 text-blue-500" /> Matches para Intercambio
-          </h3>
-          
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {matches.map((m, i) => (
-              <div key={i} className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 p-8 rounded-[2.5rem] shadow-xl relative overflow-hidden group hover:scale-[1.02] transition-transform">
-                <div className="absolute top-0 right-0 p-6">
-                  <Star className="w-6 h-6 text-amber-400 fill-amber-400" />
-                </div>
-                <div className="space-y-6">
                   <div>
-                    <h4 className="font-black text-xl leading-tight">{m.friend_name} tiene la que te falta</h4>
-                    <p className="text-slate-500 text-xs mt-1 font-bold">Sugerencia de intercambio inteligente</p>
+                    <h4 className="font-bold text-sm">{f.display_name}</h4>
+                    <div className="flex items-center gap-2">
+                      <span className={`text-[8px] font-black uppercase ${f.status === 'accepted' ? 'text-emerald-500' : 'text-amber-500'}`}>
+                        {f.status === 'accepted' ? 'Amigo' : 'Pendiente'}
+                      </span>
+                      {!f.is_public && <Lock className="w-2.5 h-2.5 text-slate-300" />}
+                    </div>
                   </div>
-                  <div className="inline-block px-10 py-6 bg-blue-50 dark:bg-blue-900/20 rounded-3xl border-2 border-blue-100 dark:border-blue-800">
-                    <span className="text-4xl font-black text-blue-600 tracking-tighter">{m.sticker_code}</span>
-                  </div>
-                  <button className="w-full py-4 bg-slate-900 dark:bg-white text-white dark:text-black rounded-2xl font-black text-sm hover:opacity-90 transition-all shadow-lg shadow-slate-900/10">
-                    Contactar Amigo
-                  </button>
                 </div>
               </div>
             ))}
+          </div>
+        </div>
 
-            {matches.length === 0 && (
-              <div className="col-span-full py-20 bg-slate-50 dark:bg-zinc-900 border border-dashed border-slate-200 dark:border-zinc-800 rounded-[2.5rem] text-center">
-                <div className="w-16 h-16 bg-white dark:bg-zinc-800 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-sm">
-                  <Info className="w-8 h-8 text-slate-300" />
+        {/* Matches */}
+        <div className="lg:col-span-3 space-y-8">
+          <div className="bg-gradient-to-r from-blue-600 to-indigo-700 rounded-[3rem] p-10 text-white shadow-2xl relative overflow-hidden">
+             <h2 className="text-3xl font-black mb-2">Intercambios Disponibles</h2>
+             <p className="text-blue-100 font-medium">Solo mostramos coincidencias de colecciones compartidas.</p>
+             <ArrowRightLeft className="absolute -right-10 -bottom-10 w-64 h-64 text-white/10" />
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+            {matches.map((m, i) => (
+              <div key={i} className={`bg-white dark:bg-zinc-900 border-2 p-8 rounded-[2.5rem] shadow-xl relative ${m.type === 'receives' ? 'border-blue-100' : 'border-amber-100'}`}>
+                <div className="mb-6">
+                  <span className={`text-[10px] font-black uppercase px-3 py-1 rounded-full ${m.type === 'receives' ? 'bg-blue-600 text-white' : 'bg-amber-500 text-white'}`}>
+                    {m.type === 'receives' ? 'Te falta' : 'Le falta'}
+                  </span>
+                  <h4 className="text-xl font-black mt-3">{m.friend_name} {m.type === 'receives' ? 'la tiene' : 'la necesita'}</h4>
+                  <p className="text-slate-400 text-[10px] font-black uppercase mt-1">Colección: {m.collection_name}</p>
                 </div>
-                <p className="text-slate-500 font-black text-lg">No hay matches todavía</p>
-                <p className="text-xs text-slate-400 mt-2 max-w-xs mx-auto font-medium">
-                  Cuando tus amigos marquen repetidas que tú no tienes en tu álbum, aparecerán aquí automáticamente.
-                </p>
+                <div className="flex items-center gap-4">
+                  <div className={`px-8 py-4 rounded-2xl border-2 font-black text-3xl ${m.type === 'receives' ? 'bg-blue-50 border-blue-100 text-blue-600' : 'bg-amber-50 border-amber-100 text-amber-600'}`}>
+                    {m.sticker_code}
+                  </div>
+                  <button className="flex-1 py-4 bg-slate-900 text-white rounded-xl font-black text-sm">Contactar</button>
+                </div>
+              </div>
+            ))}
+            {matches.length === 0 && (
+              <div className="col-span-full py-20 bg-slate-50 dark:bg-zinc-900 border-4 border-dashed border-slate-200 dark:border-zinc-800 rounded-[3rem] text-center">
+                <EyeOff className="w-12 h-12 text-slate-200 mx-auto mb-4" />
+                <p className="text-slate-500 font-bold">No hay intercambios visibles.</p>
+                <p className="text-xs text-slate-400 mt-2">Asegúrate de que tú y tus amigos tengan colecciones públicas.</p>
               </div>
             )}
           </div>

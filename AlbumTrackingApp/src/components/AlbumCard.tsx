@@ -25,13 +25,13 @@ export default function AlbumCard({ id, name, category, progress, total, collect
 
   const handleDelete = async (e: React.MouseEvent) => {
     e.stopPropagation();
-    if (!confirm(`¿Estás seguro de que quieres eliminar el álbum "${name}"? Esta acción no se puede deshacer.`)) return;
+    if (!confirm(`¿Estás seguro de que quieres eliminar la colección "${name}"? Esta acción no se puede deshacer.`)) return;
     
     setDeleting(true);
     try {
-      const { error } = await supabase.from('albums').delete().eq('id', id);
+      const { error } = await supabase.from('user_collections').delete().eq('id', id);
       if (error) throw error;
-      toast.success("Álbum eliminado");
+      toast.success("Colección eliminada");
       if (onRefresh) onRefresh();
       else router.refresh();
     } catch (error: any) {
@@ -81,7 +81,7 @@ export default function AlbumCard({ id, name, category, progress, total, collect
                 onClick={handleDelete}
                 className="w-full px-4 py-3 text-left text-sm font-bold flex items-center gap-2 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20"
               >
-                <Trash2 className="w-4 h-4" /> Eliminar Álbum
+                <Trash2 className="w-4 h-4" /> Eliminar Colección
               </button>
             </div>
           )}
@@ -127,9 +127,9 @@ export function NewAlbumCard() {
       <div className="w-20 h-20 bg-slate-100 dark:bg-zinc-800 rounded-[2rem] flex items-center justify-center mb-6 group-hover:bg-blue-600 group-hover:rotate-90 transition-all duration-500 shadow-lg group-hover:shadow-blue-500/40">
         <Plus className="w-10 h-10 text-slate-400 group-hover:text-white" />
       </div>
-      <h3 className="text-2xl font-black tracking-tight">Nuevo Álbum</h3>
+      <h3 className="text-2xl font-black tracking-tight">Nueva Colección</h3>
       <p className="text-sm text-slate-500 dark:text-zinc-500 mt-3 max-w-[200px] font-medium leading-relaxed">
-        Empieza una nueva colección con ayuda de la IA.
+        Empieza una nueva colección vinculada a un álbum oficial.
       </p>
     </Link>
   );

@@ -1,47 +1,50 @@
 import AlbumCard, { NewAlbumCard } from "@/components/AlbumCard";
 import { createClient } from "@/utils/supabase/server";
-import { Plus, BarChart3, TrendingUp, Award } from "lucide-react";
+import { Plus, BarChart3, TrendingUp, Globe, Lock } from "lucide-react";
 import Link from "next/link";
 
 export default async function DashboardPage() {
   const supabase = await createClient();
   
-  // Obtenemos los álbumes con sus stickers para calcular progreso real
-  const { data: albums } = await supabase
-    .from('albums')
+  // Obtenemos las colecciones con sus stickers y datos del álbum maestro
+  const { data: collections } = await supabase
+    .from('user_collections')
     .select(`
       *,
+      master_albums(name, total_stickers, category),
       album_stickers(status)
     `)
     .order('created_at', { ascending: false });
 
-  const processedAlbums = albums?.map(album => {
-    const stickers = album.album_stickers || [];
+  const processedCollections = collections?.map(col => {
+    const stickers = col.album_stickers || [];
     const collectedCount = stickers.filter((s: any) => s.status !== 'missing').length;
-    const progress = album.total_stickers > 0 
-      ? Math.round((collectedCount / album.total_stickers) * 100) 
-      : 0;
+    const total = col.master_albums?.total_stickers || 0;
+    const progress = total > 0 ? Math.round((collectedCount / total) * 100) : 0;
 
     return {
-      ...album,
+      ...col,
+      master_name: col.master_albums?.name || "Álbum Desconocido",
+      category: col.master_albums?.category || "General",
+      total,
       collected: collectedCount,
       progress
     };
   }) || [];
 
-  const totalCollected = processedAlbums.reduce((acc, a) => acc + a.collected, 0);
-  const totalStickers = processedAlbums.reduce((acc, a) => acc + a.total_stickers, 0);
-  const globalProgress = totalStickers > 0 ? Math.round((totalCollected / totalStickers) * 100) : 0;
+  const totalCollected = processedCollections.reduce((acc, a) => acc + a.collected, 0);
+  const totalPossible = processedCollections.reduce((acc, a) => acc + a.total, 0);
+  const globalProgress = totalPossible > 0 ? Math.round((totalCollected / totalPossible) * 100) : 0;
 
   return (
-    <div className="space-y-12">
+    <div className="space-y-12 pb-20">
       <header className="flex flex-col md:flex-row md:items-end justify-between gap-8">
         <div className="space-y-2">
           <h1 className="text-5xl font-black tracking-tighter text-slate-900 dark:text-white">
-            Panel de Control
+            Mis Colecciones
           </h1>
           <p className="text-slate-500 dark:text-zinc-400 text-lg font-medium">
-            Gestionas <span className="text-blue-600 font-black">{processedAlbums.length}</span> colecciones activas.
+            Tienes <span className="text-blue-600 font-black">{processedCollections.length}</span> colecciones activas.
           </p>
         </div>
         
@@ -57,42 +60,38 @@ export default async function DashboardPage() {
           </div>
           <div className="h-8 w-px bg-slate-100 dark:bg-zinc-800" />
           <Link href="/community" className="flex items-center gap-2 text-sm font-bold text-slate-600 hover:text-blue-600 transition-colors">
-            <BarChart3 className="w-4 h-4" /> Estadísticas
+            <BarChart3 className="w-4 h-4" /> Comunidad
           </Link>
         </div>
       </header>
 
-      {processedAlbums.length === 0 ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          <NewAlbumCard />
-          {/* Placeholder visual para invitar al usuario */}
-          <div className="md:col-span-2 bg-gradient-to-br from-blue-600 to-indigo-700 rounded-[3rem] p-12 text-white flex flex-col justify-center relative overflow-hidden group shadow-2xl">
-             <Award className="absolute top-0 right-0 w-64 h-64 -mr-20 -mt-20 text-white/10 group-hover:rotate-12 transition-transform duration-700" />
-             <h2 className="text-3xl font-black mb-4 relative z-10">¡Empieza tu primera colección!</h2>
-             <p className="text-blue-100 text-lg max-w-md relative z-10 font-medium">
-               Usa nuestro escáner IA para digitalizar tu álbum físico en segundos y empieza a trackear tus repetidas.
-             </p>
-             <Link href="/dashboard/new" className="mt-8 bg-white text-blue-600 px-8 py-4 rounded-2xl font-black w-fit hover:scale-105 transition-all shadow-xl shadow-blue-950/20 relative z-10">
-               Crear mi primer álbum
-             </Link>
-          </div>
-        </div>
-      ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
-          <NewAlbumCard />
-          {processedAlbums.map((album) => (
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+        <NewAlbumCard />
+        {processedCollections.map((col) => (
+          <div key={col.id} className="relative group">
             <AlbumCard 
-              key={album.id}
-              id={album.id}
-              name={album.name}
-              category={album.category || 'Sin categoría'}
-              total={album.total_stickers}
-              collected={album.collected}
-              progress={album.progress}
+              id={col.id}
+              name={col.name}
+              category={col.category}
+              total={col.total}
+              collected={col.collected}
+              progress={col.progress}
             />
-          ))}
-        </div>
-      )}
+            {/* Indicador de Privacidad */}
+            <div className="absolute top-10 right-20 z-10">
+               {col.is_public ? (
+                 <div className="p-2 bg-emerald-50 dark:bg-emerald-900/20 text-emerald-600 rounded-lg" title="Público">
+                   <Globe className="w-3.5 h-3.5" />
+                 </div>
+               ) : (
+                 <div className="p-2 bg-slate-100 dark:bg-zinc-800 text-slate-400 rounded-lg" title="Privado">
+                   <Lock className="w-3.5 h-3.5" />
+                 </div>
+               )}
+            </div>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

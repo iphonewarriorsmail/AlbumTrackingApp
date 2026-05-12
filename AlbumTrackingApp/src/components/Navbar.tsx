@@ -51,7 +51,7 @@ export default function Navbar() {
           {user ? (
             <>
               <Link href="/dashboard" className={`text-sm font-bold transition-colors ${pathname === "/dashboard" ? "text-blue-600" : "text-slate-500 hover:text-slate-900"}`}>
-                Mis Álbumes
+                Mis Colecciones
               </Link>
               <Link href="/community" className={`text-sm font-bold transition-colors ${pathname === "/community" ? "text-blue-600" : "text-slate-500 hover:text-slate-900"}`}>
                 Comunidad
