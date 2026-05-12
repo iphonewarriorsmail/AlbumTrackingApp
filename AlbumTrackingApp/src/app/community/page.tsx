@@ -29,11 +29,11 @@ export default function CommunityPage() {
 
   useEffect(() => {
     async function loadCommunity() {
-      const { data: { user } } = await supabase.auth.getUser();
-      setUser(user);
+      const { data: { user: authUser } } = await supabase.auth.getUser();
+      setUser(authUser);
       
-      if (user) {
-        // 1. Cargar amigos reales
+      if (authUser) {
+        // 1. Cargar amigos reales con tipado explícito
         const { data: friendData } = await supabase
           .from('friendships')
           .select(`
@@ -42,34 +42,34 @@ export default function CommunityPage() {
             friend:friend_id(id, email),
             user:user_id(id, email)
           `)
-          .or(`user_id.eq.${user.id},friend_id.eq.${user.id}`);
+          .or(`user_id.eq.${authUser.id},friend_id.eq.${authUser.id}`) as { data: any[] | null };
 
-        if (friendData) {
+        if (friendData && friendData.length > 0) {
           // Mapear para obtener los datos de perfil de los amigos
-          const friendIds = friendData.map(f => f.user.id === user.id ? f.friend.id : f.user.id);
+          const friendIds = friendData.map(f => f.user.id === authUser.id ? f.friend.id : f.user.id);
           const { data: profiles } = await supabase
             .from('user_settings')
             .select('*')
             .in('user_id', friendIds);
 
           const formattedFriends = friendData.map(f => {
-            const friendId = f.user.id === user.id ? f.friend.id : f.user.id;
+            const friendId = f.user.id === authUser.id ? f.friend.id : f.user.id;
             const profile = profiles?.find(p => p.user_id === friendId);
+            const friendEmail = f.user.id === authUser.id ? f.friend.email : f.user.email;
+            
             return {
               id: friendId,
               display_name: profile?.display_name || "Coleccionista",
               avatar_url: profile?.avatar_url || "",
-              email: f.user.id === user.id ? f.friend.email : f.user.email,
+              email: friendEmail,
               status: f.status as any
             };
           });
           setFriends(formattedFriends);
 
-          // 2. Lógica de Matches Reales (Simplificada para demo)
-          // Buscamos figuritas repetidas de amigos y cruzamos con faltantes del usuario
-          // En una app real esto se haría con un RPC de Postgres por performance
-          if (formattedFriends.filter(f => f.status === 'accepted').length > 0) {
-            calculateMatches(user.id, formattedFriends.filter(f => f.status === 'accepted').map(f => f.id));
+          const acceptedFriendIds = formattedFriends.filter(f => f.status === 'accepted').map(f => f.id);
+          if (acceptedFriendIds.length > 0) {
+            calculateMatches(authUser.id, acceptedFriendIds, formattedFriends);
           }
         }
       }
@@ -78,34 +78,41 @@ export default function CommunityPage() {
     loadCommunity();
   }, [supabase]);
 
-  const calculateMatches = async (userId: string, friendIds: string[]) => {
-    // 1. Obtener mis faltantes
-    const { data: myMissing } = await supabase
-      .from('album_stickers')
-      .select('sticker_code, album_id')
-      .eq('status', 'missing');
+  const calculateMatches = async (userId: string, friendIds: string[], currentFriends: Friend[]) => {
+    try {
+      // 1. Obtener mis faltantes
+      const { data: myMissing } = await supabase
+        .from('album_stickers')
+        .select('sticker_code, album_id')
+        .eq('status', 'missing');
 
-    // 2. Obtener repetidas de amigos
-    const { data: friendsRepeated } = await supabase
-      .from('album_stickers')
-      .select('sticker_code, album_id, albums(user_id)')
-      .eq('status', 'repeated')
-      .in('albums.user_id', friendIds);
+      // 2. Obtener repetidas de amigos
+      const { data: friendsRepeated } = await supabase
+        .from('album_stickers')
+        .select('sticker_code, album_id, albums(user_id)')
+        .eq('status', 'repeated') as { data: any[] | null };
 
-    // Cruzar (Heurística simple)
-    const foundMatches: Match[] = [];
-    myMissing?.forEach(m => {
-      const match = friendsRepeated?.find(fr => fr.sticker_code === m.sticker_code);
-      if (match) {
-        const friendProfile = friends.find(f => f.id === (match.albums as any).user_id);
-        foundMatches.push({
-          friend_name: friendProfile?.display_name || "Amigo",
-          sticker_code: m.sticker_code,
-          type: 'gives'
-        });
-      }
-    });
-    setMatches(foundMatches.slice(0, 4));
+      if (!myMissing || !friendsRepeated) return;
+
+      // Filtrar repetidas que pertenezcan a mis amigos
+      const filteredRepeated = friendsRepeated.filter(fr => friendIds.includes(fr.albums?.user_id));
+
+      const foundMatches: Match[] = [];
+      myMissing.forEach(m => {
+        const match = filteredRepeated.find(fr => fr.sticker_code === m.sticker_code);
+        if (match) {
+          const friendProfile = currentFriends.find(f => f.id === match.albums?.user_id);
+          foundMatches.push({
+            friend_name: friendProfile?.display_name || "Amigo",
+            sticker_code: m.sticker_code,
+            type: 'gives'
+          });
+        }
+      });
+      setMatches(foundMatches.slice(0, 4));
+    } catch (err) {
+      console.error("Error calculating matches:", err);
+    }
   };
 
   const handleAddFriend = async () => {
@@ -113,20 +120,25 @@ export default function CommunityPage() {
     const toastId = toast.loading("Buscando usuario...");
 
     try {
-      // Buscar usuario por email (Necesitaríamos que el usuario esté en auth.users)
-      // Como no podemos buscar en auth.users directamente, dependemos de que tengan perfil en user_settings
-      // o usaríamos una Edge Function. Por ahora, asumimos que si tiene perfil, existe.
-      const { data: targetUser, error: searchError } = await supabase
+      const { data: targetUser } = await supabase
         .from('user_settings')
         .select('user_id')
-        .eq('display_name', searchEmail) // Simplificación: buscamos por nombre o email si estuviera en la tabla
+        .eq('display_name', searchEmail)
         .single();
 
-      // Demo: Para esta versión, simulamos el envío de solicitud si no encontramos el ID real
-      toast.success("Solicitud de amistad enviada con éxito", { id: toastId });
-      setSearchEmail("");
+      if (targetUser && user) {
+        const { error } = await supabase.from('friendships').insert({
+          user_id: user.id,
+          friend_id: targetUser.user_id,
+          status: 'pending'
+        });
+        if (error) throw error;
+        toast.success("Solicitud enviada", { id: toastId });
+      } else {
+        toast.error("Usuario no encontrado", { id: toastId });
+      }
     } catch (error) {
-      toast.error("Usuario no encontrado", { id: toastId });
+      toast.error("Error al enviar solicitud", { id: toastId });
     }
   };
 
@@ -138,15 +150,15 @@ export default function CommunityPage() {
 
   return (
     <div className="max-w-6xl mx-auto pb-20 pt-10">
-      <header className="mb-12 flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
+      <header className="mb-12 flex flex-col md:flex-row justify-between items-start md:items-center gap-6 px-4">
         <div>
           <h1 className="text-4xl font-black tracking-tight">Comunidad</h1>
-          <p className="text-slate-500 mt-2 text-lg">Tus amigos y oportunidades de intercambio.</p>
+          <p className="text-slate-500 mt-2 text-lg font-medium">Tus amigos y oportunidades de intercambio.</p>
         </div>
         <div className="flex bg-white dark:bg-zinc-900 p-2 rounded-2xl border border-slate-200 dark:border-zinc-800 w-full md:w-auto shadow-xl">
           <input 
             className="bg-transparent border-none px-4 py-2 outline-none text-sm w-full md:w-64"
-            placeholder="Email o Nombre de amigo..."
+            placeholder="Nombre de usuario del amigo..."
             value={searchEmail}
             onChange={(e) => setSearchEmail(e.target.value)}
           />
@@ -159,18 +171,18 @@ export default function CommunityPage() {
         </div>
       </header>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-10">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-10 px-4">
         <div className="lg:col-span-1 space-y-6">
           <h3 className="text-xs font-black uppercase tracking-widest text-slate-400 flex items-center gap-2">
             <Users className="w-4 h-4" /> Mis Amigos ({friends.length})
           </h3>
-          <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-[2.5rem] overflow-hidden">
+          <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-[2.5rem] overflow-hidden shadow-sm">
             <div className="divide-y divide-slate-100 dark:divide-zinc-800">
               {friends.map((f) => (
                 <div key={f.id} className="p-6 flex items-center justify-between hover:bg-slate-50 dark:hover:bg-zinc-800/50 transition-all">
                   <div className="flex items-center gap-4">
-                    <div className="w-12 h-12 bg-blue-100 dark:bg-blue-900/30 rounded-2xl flex items-center justify-center font-black text-blue-600">
-                      {f.display_name[0]}
+                    <div className="w-12 h-12 bg-blue-100 dark:bg-blue-900/30 rounded-2xl flex items-center justify-center font-black text-blue-600 text-xl">
+                      {f.display_name[0].toUpperCase()}
                     </div>
                     <div>
                       <h4 className="font-bold text-sm">{f.display_name}</h4>
@@ -205,20 +217,20 @@ export default function CommunityPage() {
           
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             {matches.map((m, i) => (
-              <div key={i} className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 p-8 rounded-[2.5rem] shadow-xl relative overflow-hidden group">
-                <div className="absolute top-0 right-0 p-4">
-                  <Star className="w-5 h-5 text-amber-400 fill-amber-400" />
+              <div key={i} className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 p-8 rounded-[2.5rem] shadow-xl relative overflow-hidden group hover:scale-[1.02] transition-transform">
+                <div className="absolute top-0 right-0 p-6">
+                  <Star className="w-6 h-6 text-amber-400 fill-amber-400" />
                 </div>
-                <div className="space-y-4">
+                <div className="space-y-6">
                   <div>
-                    <h4 className="font-black text-lg">{m.friend_name} tiene la que te falta</h4>
-                    <p className="text-slate-500 text-xs">Sugerencia de intercambio</p>
+                    <h4 className="font-black text-xl leading-tight">{m.friend_name} tiene la que te falta</h4>
+                    <p className="text-slate-500 text-xs mt-1 font-bold">Sugerencia de intercambio inteligente</p>
                   </div>
-                  <div className="inline-block px-8 py-4 bg-blue-50 dark:bg-blue-900/20 rounded-2xl border border-blue-100 dark:border-blue-800">
-                    <span className="text-3xl font-black text-blue-600 tracking-tighter">{m.sticker_code}</span>
+                  <div className="inline-block px-10 py-6 bg-blue-50 dark:bg-blue-900/20 rounded-3xl border-2 border-blue-100 dark:border-blue-800">
+                    <span className="text-4xl font-black text-blue-600 tracking-tighter">{m.sticker_code}</span>
                   </div>
-                  <button className="w-full py-3 bg-slate-900 dark:bg-white text-white dark:text-black rounded-xl font-bold text-sm hover:opacity-90 transition-all">
-                    Contactar
+                  <button className="w-full py-4 bg-slate-900 dark:bg-white text-white dark:text-black rounded-2xl font-black text-sm hover:opacity-90 transition-all shadow-lg shadow-slate-900/10">
+                    Contactar Amigo
                   </button>
                 </div>
               </div>
@@ -226,9 +238,13 @@ export default function CommunityPage() {
 
             {matches.length === 0 && (
               <div className="col-span-full py-20 bg-slate-50 dark:bg-zinc-900 border border-dashed border-slate-200 dark:border-zinc-800 rounded-[2.5rem] text-center">
-                <Info className="w-12 h-12 text-slate-300 mx-auto mb-4" />
-                <p className="text-slate-500 font-bold">No hay matches disponibles.</p>
-                <p className="text-xs text-slate-400 mt-1">Cuando tus amigos marquen repetidas que tú no tienes, aparecerán aquí.</p>
+                <div className="w-16 h-16 bg-white dark:bg-zinc-800 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-sm">
+                  <Info className="w-8 h-8 text-slate-300" />
+                </div>
+                <p className="text-slate-500 font-black text-lg">No hay matches todavía</p>
+                <p className="text-xs text-slate-400 mt-2 max-w-xs mx-auto font-medium">
+                  Cuando tus amigos marquen repetidas que tú no tienes en tu álbum, aparecerán aquí automáticamente.
+                </p>
               </div>
             )}
           </div>
