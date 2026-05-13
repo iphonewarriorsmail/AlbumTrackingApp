@@ -165,10 +165,13 @@ export default function CommunityPage() {
       const { data: target } = await supabase
         .from('user_settings')
         .select('user_id, display_name, is_public')
-        .or(`display_name.ilike.%${searchQuery}%,email.eq.${searchQuery.toLowerCase()}`)
-        .single();
+        .or(`display_name.ilike.%${searchQuery}%,email.ilike.${searchQuery}`)
+        .maybeSingle();
 
-      if (!target) throw new Error("Usuario no encontrado");
+      if (!target) {
+        toast.error("No se encontró ningún coleccionista con ese nombre o email", { id: toastId });
+        return;
+      }
 
       // Regla: Si es público, agregar directo. Si es privado, solicitud pendiente.
       const status = target.is_public ? 'accepted' : 'pending';
