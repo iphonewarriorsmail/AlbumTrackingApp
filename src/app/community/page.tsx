@@ -47,25 +47,23 @@ export default function CommunityPage() {
         // 2. Cargar amigos y solicitudes
         const { data: friendData } = await supabase
           .from('friendships')
-          .select(`
-            id, status, friend:friend_id(id, email), user:user_id(id, email)
-          `)
-          .or(`user_id.eq.${authUser.id},friend_id.eq.${authUser.id}`) as { data: any[] | null };
+          .select('id, status, user_id, friend_id')
+          .or(`user_id.eq.${authUser.id},friend_id.eq.${authUser.id}`);
 
-        if (friendData) {
-          const friendIds = friendData.map(f => f.user.id === authUser.id ? f.friend.id : f.user.id);
+        if (friendData && friendData.length > 0) {
+          const friendIds = friendData.map(f => f.user_id === authUser.id ? f.friend_id : f.user_id);
           const { data: profiles } = await supabase
             .from('user_settings')
-            .select('user_id, display_name, is_public')
+            .select('user_id, display_name, email, is_public')
             .in('user_id', friendIds);
 
           const formattedFriends = friendData.map(f => {
-            const friendId = f.user.id === authUser.id ? f.friend.id : f.user.id;
+            const friendId = f.user_id === authUser.id ? f.friend_id : f.user_id;
             const profile = profiles?.find(p => p.user_id === friendId);
             return {
               id: friendId,
               display_name: profile?.display_name || "Coleccionista",
-              email: f.user.id === authUser.id ? f.friend.email : f.user.email,
+              email: profile?.email || "",
               status: f.status as any,
               is_public: profile?.is_public ?? true
             };
