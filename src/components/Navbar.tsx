@@ -9,6 +9,7 @@ import { toast } from "react-hot-toast";
 
 export default function Navbar() {
   const [user, setUser] = useState<any>(null);
+  const [pendingCount, setPendingCount] = useState(0);
   const router = useRouter();
   const pathname = usePathname();
   const supabase = createClient();
@@ -17,6 +18,20 @@ export default function Navbar() {
     const getUser = async () => {
       const { data: { user } } = await supabase.auth.getUser();
       setUser(user);
+      if (user) {
+        const { count: notifCount } = await supabase
+          .from('notifications')
+          .select('*', { count: 'exact', head: true })
+          .eq('user_id', user.id);
+          
+        const { count: requestCount } = await supabase
+          .from('friendships')
+          .select('*', { count: 'exact', head: true })
+          .eq('friend_id', user.id)
+          .eq('status', 'pending');
+          
+        setPendingCount((notifCount || 0) + (requestCount || 0));
+      }
     };
     getUser();
 
@@ -56,8 +71,13 @@ export default function Navbar() {
               <Link href="/community" className={`text-sm font-bold transition-colors ${pathname === "/community" ? "text-blue-600" : "text-slate-500 hover:text-slate-900"}`}>
                 Comunidad
               </Link>
-              <Link href="/messages" className={`text-sm font-bold transition-colors ${pathname === "/messages" ? "text-blue-600" : "text-slate-500 hover:text-slate-900"}`}>
+              <Link href="/messages" className={`flex items-center gap-2 text-sm font-bold transition-colors ${pathname === "/messages" ? "text-blue-600" : "text-slate-500 hover:text-slate-900"}`}>
                 Mensajes
+                {pendingCount > 0 && (
+                  <span className="bg-blue-500 text-white text-[10px] px-1.5 py-0.5 rounded-full font-black">
+                    {pendingCount}
+                  </span>
+                )}
               </Link>
             </>
           ) : (

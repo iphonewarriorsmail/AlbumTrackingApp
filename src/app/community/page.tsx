@@ -186,8 +186,8 @@ export default function CommunityPage() {
         return;
       }
 
-      const isAlreadyFriend = friends.some(f => f.id === target.user_id);
-      setSearchResult({ ...target, isAlreadyFriend });
+      const existingFriend = friends.find(f => f.id === target.user_id);
+      setSearchResult({ ...target, friendshipStatus: existingFriend?.status || null });
       toast.dismiss(toastId);
     } catch (error) {
       toast.error("Error en la búsqueda", { id: toastId });
@@ -312,13 +312,17 @@ export default function CommunityPage() {
                   Ver Colecciones
                 </button>
              )}
-             {!searchResult.isAlreadyFriend ? (
+             {!searchResult.friendshipStatus ? (
                <button onClick={sendFriendRequest} className="px-6 py-3 bg-blue-600 text-white rounded-xl font-bold text-sm shadow-lg shadow-blue-500/20 hover:scale-105 transition-transform flex items-center gap-2">
                  <UserPlus className="w-4 h-4" /> Enviar Solicitud
                </button>
              ) : (
-               <div className="px-6 py-3 bg-emerald-50 dark:bg-emerald-900/20 text-emerald-600 font-bold rounded-xl text-sm flex items-center gap-2">
-                 <Check className="w-4 h-4" /> Relación existente
+               <div className={`px-6 py-3 font-bold rounded-xl text-sm flex items-center gap-2 ${searchResult.friendshipStatus === 'accepted' ? 'bg-emerald-50 dark:bg-emerald-900/20 text-emerald-600' : 'bg-amber-50 dark:bg-amber-900/20 text-amber-600'}`}>
+                 {searchResult.friendshipStatus === 'accepted' ? (
+                   <><Check className="w-4 h-4" /> Ya son amigos</>
+                 ) : (
+                   <><Clock className="w-4 h-4" /> Solicitud pendiente</>
+                 )}
                </div>
              )}
           </div>
