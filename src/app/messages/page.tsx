@@ -35,37 +35,54 @@ export default function MessagesPage() {
       // Fetch notifications
       const { data: notifs } = await supabase
         .from("notifications")
-        .select(`
-          *,
-          from_user:user_settings!notifications_from_user_id_fkey(display_name, avatar_url)
-        `)
+        .select('*')
         .eq("user_id", user.id)
         .order("created_at", { ascending: false });
-      
-      setNotifications(notifs || []);
 
       // Fetch friend requests (pending)
       const { data: requests } = await supabase
         .from("friendships")
-        .select(`
-          *,
-          sender:user_settings!friendships_user_id_fkey(display_name, avatar_url)
-        `)
+        .select('*')
         .eq("friend_id", user.id)
         .eq("status", "pending");
+
+      // Fetch profiles
+      const userIdsToFetch = new Set<string>();
+      if (notifs) notifs.forEach(n => { if (n.from_user_id) userIdsToFetch.add(n.from_user_id); });
+      if (requests) requests.forEach(r => { if (r.user_id) userIdsToFetch.add(r.user_id); });
+
+      let profilesMap: Record<string, any> = {};
+      if (userIdsToFetch.size > 0) {
+        const { data: profiles } = await supabase
+          .from("user_settings")
+          .select("user_id, display_name, avatar_url")
+          .in("user_id", Array.from(userIdsToFetch));
+        
+        if (profiles) {
+          profilesMap = profiles.reduce((acc, p) => {
+            acc[p.user_id] = p;
+            return acc;
+          }, {} as Record<string, any>);
+        }
+      }
+
+      const formattedNotifs = (notifs || []).map(n => ({
+        ...n,
+        from_user: profilesMap[n.from_user_id]
+      }));
 
       // Merge friend requests into notifications for the UI
       const requestNotifs = (requests || []).map(req => ({
         id: req.id,
         type: "friend_request",
-        from_user: req.sender,
+        from_user: profilesMap[req.user_id],
         content: "quiere ser tu amigo",
         created_at: req.created_at,
         status: "unread",
         data: req
       }));
 
-      setNotifications(prev => [...requestNotifs, ...prev].sort((a, b) => 
+      setNotifications([...requestNotifs, ...formattedNotifs].sort((a, b) => 
         new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
       ));
 
