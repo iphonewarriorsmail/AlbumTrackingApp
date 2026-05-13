@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { createClient } from "@/utils/supabase/client";
-import { Users, UserPlus, Search, ArrowRightLeft, Loader2, Info, Star, Check, Clock, UserCheck, BookOpen, ChevronRight, Lock, EyeOff } from "lucide-react";
+import { Users, UserPlus, Search, ArrowRightLeft, Loader2, Info, Star, Check, Clock, UserCheck, BookOpen, ChevronRight, Lock, EyeOff, Trash2, Layers, X } from "lucide-react";
 import { toast } from "react-hot-toast";
 
 interface Friend {
@@ -29,6 +29,8 @@ export default function CommunityPage() {
   const [userCollections, setUserCollections] = useState<any[]>([]);
   const [selectedCollectionId, setSelectedCollectionId] = useState<string>("all");
   const [searchQuery, setSearchQuery] = useState("");
+  const [searchResult, setSearchResult] = useState<any>(null);
+  const [friendStickersModal, setFriendStickersModal] = useState<{ isOpen: boolean, friendName: string, collections: any[] }>({ isOpen: false, friendName: "", collections: [] });
   const [user, setUser] = useState<any>(null);
 
   useEffect(() => {
@@ -163,9 +165,10 @@ export default function CommunityPage() {
     }
   };
 
-  const handleAddFriend = async () => {
+  const handleSearch = async () => {
     if (!searchQuery || !user) return;
     const toastId = toast.loading("Buscando...");
+    setSearchResult(null);
     try {
       const { data: target } = await supabase
         .from('user_settings')
@@ -174,35 +177,96 @@ export default function CommunityPage() {
         .maybeSingle();
 
       if (!target) {
-        toast.error("No se encontró ningún coleccionista con ese nombre o email", { id: toastId });
+        toast.error("No se encontró ningún coleccionista", { id: toastId });
         return;
       }
 
-      // Regla: Si es público, agregar directo. Si es privado, solicitud pendiente.
-      const status = target.is_public ? 'accepted' : 'pending';
-      
+      if (target.user_id === user.id) {
+        toast.error("No puedes agregarte a ti mismo", { id: toastId });
+        return;
+      }
+
+      const isAlreadyFriend = friends.some(f => f.id === target.user_id);
+      setSearchResult({ ...target, isAlreadyFriend });
+      toast.dismiss(toastId);
+    } catch (error) {
+      toast.error("Error en la búsqueda", { id: toastId });
+    }
+  };
+
+  const sendFriendRequest = async () => {
+    if (!searchResult || !user) return;
+    const toastId = toast.loading("Enviando solicitud...");
+    try {
       const { error } = await supabase.from('friendships').insert({
         user_id: user.id,
-        friend_id: target.user_id,
-        status: status
+        friend_id: searchResult.user_id,
+        status: 'pending'
       });
 
       if (error) throw error;
 
-      // Notificar al destinatario
       await supabase.from('notifications').insert({
-        user_id: target.user_id,
+        user_id: searchResult.user_id,
         from_user_id: user.id,
-        type: status === 'accepted' ? 'friend_accepted' : 'friend_request',
-        content: status === 'accepted' 
-          ? `${user.email} te ha añadido como amigo.` 
-          : `${user.email} quiere ser tu amigo.`
+        type: 'friend_request',
+        content: `${user.email} quiere ser tu amigo.`
       });
 
-      toast.success(status === 'accepted' ? `¡${target.display_name} añadido!` : "Solicitud enviada", { id: toastId });
+      toast.success("Solicitud enviada", { id: toastId });
+      setSearchResult(null);
       window.location.reload();
     } catch (error) {
-      toast.error("Error al procesar la solicitud", { id: toastId });
+      toast.error("Error al enviar solicitud", { id: toastId });
+    }
+  };
+
+  const handleRemoveFriend = async (friendId: string) => {
+    if (!confirm("¿Seguro que quieres eliminar a este amigo?")) return;
+    const toastId = toast.loading("Eliminando...");
+    try {
+      const { error } = await supabase
+        .from('friendships')
+        .delete()
+        .or(`and(user_id.eq.${user.id},friend_id.eq.${friendId}),and(user_id.eq.${friendId},friend_id.eq.${user.id})`);
+      
+      if (error) throw error;
+      toast.success("Amistad eliminada", { id: toastId });
+      window.location.reload();
+    } catch (err) {
+      toast.error("Error al eliminar", { id: toastId });
+    }
+  };
+
+  const viewFriendCollections = async (friendId: string, friendName: string) => {
+    const toastId = toast.loading("Cargando colecciones...");
+    try {
+      const { data: cols } = await supabase
+        .from('user_collections')
+        .select('id, name')
+        .eq('user_id', friendId)
+        .eq('is_public', true);
+
+      if (!cols || cols.length === 0) {
+        toast.error("Este usuario no tiene colecciones públicas", { id: toastId });
+        return;
+      }
+
+      const { data: stickers } = await supabase
+        .from('album_stickers')
+        .select('album_id, sticker_code, status')
+        .in('album_id', cols.map(c => c.id));
+
+      const collectionsWithStickers = cols.map(c => ({
+        ...c,
+        missing: (stickers || []).filter(s => s.album_id === c.id && s.status === 'missing').map(s => s.sticker_code),
+        repeated: (stickers || []).filter(s => s.album_id === c.id && s.status === 'repeated').map(s => s.sticker_code),
+      }));
+
+      setFriendStickersModal({ isOpen: true, friendName, collections: collectionsWithStickers });
+      toast.dismiss(toastId);
+    } catch (err) {
+      toast.error("Error al cargar datos", { id: toastId });
     }
   };
 
@@ -220,13 +284,46 @@ export default function CommunityPage() {
             placeholder="Buscar coleccionista..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && handleAddFriend()}
+            onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
           />
-          <button onClick={handleAddFriend} className="bg-blue-600 text-white px-8 py-3 rounded-2xl font-black text-sm hover:scale-105 transition-all">
-            Añadir
+          <button onClick={handleSearch} className="bg-blue-600 text-white px-8 py-3 rounded-2xl font-black text-sm hover:scale-105 transition-all">
+            Buscar
           </button>
         </div>
       </header>
+
+      {searchResult && (
+        <div className="mb-12 bg-white dark:bg-zinc-900 p-6 rounded-[2rem] border-2 border-blue-100 dark:border-blue-900/30 shadow-xl flex flex-col md:flex-row items-center justify-between gap-6">
+          <div className="flex items-center gap-4 w-full md:w-auto">
+             <div className="w-14 h-14 bg-blue-100 dark:bg-blue-900/30 text-blue-600 rounded-2xl flex items-center justify-center font-black text-xl">
+               {searchResult.display_name[0]}
+             </div>
+             <div>
+               <h3 className="font-black text-xl">{searchResult.display_name}</h3>
+               <div className="flex items-center gap-2 text-slate-500 text-sm font-bold">
+                 {!searchResult.is_public && <Lock className="w-3 h-3" />}
+                 {searchResult.is_public ? "Perfil Público" : "Perfil Privado"}
+               </div>
+             </div>
+          </div>
+          <div className="flex items-center gap-3 w-full md:w-auto justify-end">
+             {searchResult.is_public && (
+                <button onClick={() => viewFriendCollections(searchResult.user_id, searchResult.display_name)} className="px-6 py-3 bg-slate-100 dark:bg-zinc-800 rounded-xl font-bold text-sm hover:bg-slate-200 dark:hover:bg-zinc-700 transition-colors">
+                  Ver Colecciones
+                </button>
+             )}
+             {!searchResult.isAlreadyFriend ? (
+               <button onClick={sendFriendRequest} className="px-6 py-3 bg-blue-600 text-white rounded-xl font-bold text-sm shadow-lg shadow-blue-500/20 hover:scale-105 transition-transform flex items-center gap-2">
+                 <UserPlus className="w-4 h-4" /> Enviar Solicitud
+               </button>
+             ) : (
+               <div className="px-6 py-3 bg-emerald-50 dark:bg-emerald-900/20 text-emerald-600 font-bold rounded-xl text-sm flex items-center gap-2">
+                 <Check className="w-4 h-4" /> Relación existente
+               </div>
+             )}
+          </div>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-12">
         {/* Sidebar Amigos */}
@@ -250,6 +347,16 @@ export default function CommunityPage() {
                       {!f.is_public && <Lock className="w-2.5 h-2.5 text-slate-300" />}
                     </div>
                   </div>
+                </div>
+                <div className="flex items-center gap-1">
+                  {f.status === 'accepted' && f.is_public && (
+                    <button onClick={() => viewFriendCollections(f.id, f.display_name)} className="p-2 text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-lg transition-colors" title="Ver cromos">
+                      <Layers className="w-4 h-4" />
+                    </button>
+                  )}
+                  <button onClick={() => handleRemoveFriend(f.id)} className="p-2 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors" title="Eliminar">
+                    <Trash2 className="w-4 h-4" />
+                  </button>
                 </div>
               </div>
             ))}
@@ -292,6 +399,52 @@ export default function CommunityPage() {
           </div>
         </div>
       </div>
+
+      {/* Modal de Colecciones del Amigo */}
+      {friendStickersModal.isOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+          <div className="bg-white dark:bg-zinc-950 w-full max-w-3xl rounded-[2.5rem] shadow-2xl border border-slate-200 dark:border-zinc-800 overflow-hidden flex flex-col max-h-[85vh]">
+            <div className="p-6 md:p-8 border-b border-slate-100 dark:border-zinc-800 flex justify-between items-center bg-slate-50 dark:bg-zinc-900">
+               <div>
+                 <h2 className="text-2xl font-black">Cromos de {friendStickersModal.friendName}</h2>
+                 <p className="text-slate-500 text-sm font-bold">Explora sus colecciones públicas</p>
+               </div>
+               <button onClick={() => setFriendStickersModal({ isOpen: false, friendName: "", collections: [] })} className="p-2 bg-white dark:bg-zinc-800 border border-slate-200 dark:border-zinc-700 rounded-full hover:scale-110 transition-transform shadow-sm">
+                 <X className="w-5 h-5" />
+               </button>
+            </div>
+            <div className="p-6 md:p-8 overflow-y-auto space-y-10 custom-scrollbar">
+               {friendStickersModal.collections.map((col, idx) => (
+                 <div key={idx} className="space-y-6">
+                   <h3 className="font-black text-xl border-b border-slate-100 dark:border-zinc-800 pb-4">{col.name}</h3>
+                   <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                     <div className="space-y-3 bg-blue-50/50 dark:bg-blue-900/10 p-6 rounded-3xl border border-blue-100 dark:border-blue-900/30">
+                       <span className="text-xs font-black uppercase tracking-widest text-blue-600 bg-white dark:bg-zinc-900 px-3 py-1.5 rounded-full shadow-sm">Le Faltan ({col.missing.length})</span>
+                       <div className="flex flex-wrap gap-2 mt-4">
+                         {col.missing.length > 0 ? col.missing.map((m: string) => (
+                           <span key={m} className="text-sm font-black px-3 py-1.5 bg-white dark:bg-zinc-800 border border-slate-200 dark:border-zinc-700 rounded-xl shadow-sm">{m}</span>
+                         )) : <span className="text-sm text-slate-500 font-medium">No le faltan cromos</span>}
+                       </div>
+                     </div>
+                     <div className="space-y-3 bg-emerald-50/50 dark:bg-emerald-900/10 p-6 rounded-3xl border border-emerald-100 dark:border-emerald-900/30">
+                       <span className="text-xs font-black uppercase tracking-widest text-emerald-600 bg-white dark:bg-zinc-900 px-3 py-1.5 rounded-full shadow-sm">Repetidos ({col.repeated.length})</span>
+                       <div className="flex flex-wrap gap-2 mt-4">
+                         {col.repeated.length > 0 ? col.repeated.map((r: string) => (
+                           <span key={r} className="text-sm font-black px-3 py-1.5 bg-white dark:bg-zinc-800 border border-slate-200 dark:border-zinc-700 rounded-xl shadow-sm">{r}</span>
+                         )) : <span className="text-sm text-slate-500 font-medium">No tiene repetidos</span>}
+                       </div>
+                     </div>
+                   </div>
+                 </div>
+               ))}
+               {friendStickersModal.collections.length === 0 && (
+                 <p className="text-center text-slate-500 py-10 font-bold">Este usuario no tiene colecciones públicas.</p>
+               )}
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }
