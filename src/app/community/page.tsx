@@ -57,17 +57,24 @@ export default function CommunityPage() {
             .select('user_id, display_name, email, is_public')
             .in('user_id', friendIds);
 
-          const formattedFriends = friendData.map(f => {
+          const uniqueFriendsMap = new Map();
+          
+          friendData.forEach(f => {
             const friendId = f.user_id === authUser.id ? f.friend_id : f.user_id;
-            const profile = profiles?.find(p => p.user_id === friendId);
-            return {
-              id: friendId,
-              display_name: profile?.display_name || "Coleccionista",
-              email: profile?.email || "",
-              status: f.status as any,
-              is_public: profile?.is_public ?? true
-            };
+            // Si ya existe, priorizar el estado 'accepted'
+            if (!uniqueFriendsMap.has(friendId) || f.status === 'accepted') {
+              const profile = profiles?.find(p => p.user_id === friendId);
+              uniqueFriendsMap.set(friendId, {
+                id: friendId,
+                display_name: profile?.display_name || "Coleccionista",
+                email: profile?.email || "",
+                status: f.status as any,
+                is_public: profile?.is_public ?? true
+              });
+            }
           });
+
+          const formattedFriends = Array.from(uniqueFriendsMap.values());
           setFriends(formattedFriends);
           
           const acceptedFriends = formattedFriends.filter(f => f.status === 'accepted');
